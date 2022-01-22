@@ -1,1 +1,1 @@
-worker: secretlounge-ng
+worker: source secretlounge-ng
