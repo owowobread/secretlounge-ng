@@ -1,25 +1,38 @@
 import logging
 from datetime import datetime, timedelta
 from threading import Lock
+from importlib import import_module
+from typing import Optional
 
-import src.replies as rp
-from src.globals import *
-from src.database import User, SystemConfig
-from src.cache import CachedMessage
-from src.util import genTripcode
+from . import replies as rp
+from .globals import *
+from .database import User, SystemConfig
+from .cache import CachedMessage
+from .util import genTripcode
+
+# module variables
 
 db = None
 ch = None
 spam_scores = None
 sign_last_used = {} # uid -> datetime
 
-blacklist_contact = None
-enable_signing = None
-allow_remove_command = None
-media_limit_period = None
-sign_interval = None
+# settings
 
-def init(config, _db, _ch):
+blacklist_contact: str = None
+enable_signing: bool = None
+allow_remove_command: bool = None
+media_limit_period: Optional[timedelta]  = None
+sign_interval: timedelta = None
+
+class IUserContainer():
+	id: int
+	username: str
+	realname: str
+	def __init__(self):
+		raise NotImplementedError()
+
+def init(config: dict, _db, _ch):
 	global db, ch, spam_scores, blacklist_contact, enable_signing, allow_remove_command, media_limit_period, sign_interval
 	db = _db
 	ch = _ch
@@ -33,8 +46,10 @@ def init(config, _db, _ch):
 	sign_interval = timedelta(seconds=int(config.get("sign_limit_interval", 600)))
 
 	if config.get("locale"):
-		rp.localization = __import__("src.replies_" + config["locale"],
-			fromlist=["localization"]).localization
+		rp.localization = import_module("..replies_" + config["locale"], __name__).localization
+
+	if config.get("secret_salt"):
+		User.setSalt(bytes.fromhex(config["secret_salt"]))
 
 	# initialize db if empty
 	if db.getSystemConfig() is None:
@@ -56,13 +71,13 @@ def register_tasks(sched):
 					user.removeWarning()
 	sched.register(task, minutes=15)
 
-def updateUserFromEvent(user, c_user):
+def updateUserFromEvent(user, c_user: IUserContainer):
 	user.username = c_user.username
 	user.realname = c_user.realname
 	user.lastActive = datetime.now()
 
 def getUserByName(username):
-	username = username.lower()
+	username = username.lstrip("@").lower()
 	# there *should* only be a single joined user with a given username
 	for user in db.iterateUsers():
 		if not user.isJoined():
@@ -107,8 +122,7 @@ def requireUser(func):
 def requireRank(need_rank):
 	def f(func):
 		def wrapper(user, *args, **kwargs):
-			if not isinstance(user, User):
-				raise SyntaxError("you fucked up the decorator order")
+			assert isinstance(user, User), "you fucked up the decorator order"
 			if user.rank < need_rank:
 				return
 			return func(user, *args, **kwargs)
@@ -148,13 +162,13 @@ class ScoreKeeper():
 
 class Receiver():
 	@staticmethod
-	def reply(m, msid, who, except_who, reply_to):
+	def reply(m: rp.Reply, msid: int, who, except_who, reply_to: bool):
 		raise NotImplementedError()
 	@staticmethod
-	def delete(msid):
+	def delete(msids: 'list[int]'):
 		raise NotImplementedError()
 	@staticmethod
-	def stop_invoked(who, delete_out):
+	def stop_invoked(who, delete_out: bool):
 		raise NotImplementedError()
 
 class Sender(Receiver): # flawless class hierachy I know...
@@ -165,10 +179,10 @@ class Sender(Receiver): # flawless class hierachy I know...
 		for r in Sender.receivers:
 			r.reply(m, msid, who, except_who, reply_to)
 	@staticmethod
-	def delete(msid):
-		logging.debug("delete(msid=%d)", msid)
+	def delete(msids):
+		logging.debug("delete(msids=%r)", msids)
 		for r in Sender.receivers:
-			r.delete(msid)
+			r.delete(msids)
 	@staticmethod
 	def stop_invoked(who, delete_out=False):
 		logging.debug("stop_invoked(who=%s)", who)
@@ -182,7 +196,7 @@ def registerReceiver(obj):
 
 ####
 
-def user_join(c_user):
+def user_join(c_user: IUserContainer):
 	try:
 		user = db.getUser(id=c_user.id)
 	except KeyError as e:
@@ -232,14 +246,14 @@ def force_user_leave(user_id, blocked=True):
 	Sender.stop_invoked(user)
 
 @requireUser
-def user_leave(user):
+def user_leave(user: User):
 	force_user_leave(user.id, blocked=False)
 	logging.info("%s left chat", user)
 
 	return rp.Reply(rp.types.CHAT_LEAVE)
 
 @requireUser
-def get_info(user):
+def get_info(user: User):
 	params = {
 		"id": user.getObfuscatedId(),
 		"username": user.getFormattedName(),
@@ -254,7 +268,7 @@ def get_info(user):
 
 @requireUser
 @requireRank(RANKS.mod)
-def get_info_mod(user, msid):
+def get_info_mod(user: User, msid):
 	cm = ch.getMessage(msid)
 	if cm is None or cm.user_id is None:
 		return rp.Reply(rp.types.ERR_NOT_IN_CACHE)
@@ -268,15 +282,15 @@ def get_info_mod(user, msid):
 	return rp.Reply(rp.types.USER_INFO_MOD, **params)
 
 @requireUser
-def get_users(user):
+def get_users(user: User):
 	if user.rank < RANKS.mod:
-		n = sum(1 for user in db.iterateUsers() if user.isJoined())
+		n = sum(1 for user2 in db.iterateUsers() if user2.isJoined())
 		return rp.Reply(rp.types.USERS_INFO, count=n)
 	active, inactive, black = 0, 0, 0
-	for user in db.iterateUsers():
-		if user.isBlacklisted():
+	for user2 in db.iterateUsers():
+		if user2.isBlacklisted():
 			black += 1
-		elif not user.isJoined():
+		elif not user2.isJoined():
 			inactive += 1
 		else:
 			active += 1
@@ -285,46 +299,50 @@ def get_users(user):
 		total=active + inactive + black)
 
 @requireUser
-def get_motd(user):
-	motd = db.getSystemConfig().motd
-	if motd == "": return
-	return rp.Reply(rp.types.CUSTOM, text=motd)
+def get_system_text(user: User, key: str):
+	if key not in ("motd", "privacy"):
+		raise ValueError()
+	v = getattr(db.getSystemConfig(), key)
+	if v:
+		return rp.Reply(rp.types.CUSTOM, text=v)
 
 @requireUser
 @requireRank(RANKS.admin)
-def set_motd(user, arg):
+def set_system_text(user: User, key: str, arg: str):
+	if key not in ("motd", "privacy"):
+		raise ValueError()
 	with db.modifySystemConfig() as config:
-		config.motd = arg
-	logging.info("%s set motd to: %r", user, arg)
+		setattr(config, key, arg)
+	logging.info("%s set %s to: %r", user, key, arg)
 	return rp.Reply(rp.types.SUCCESS)
 
 @requireUser
-def toggle_debug(user):
+def toggle_debug(user: User):
 	with db.modifyUser(id=user.id) as user:
 		user.debugEnabled = not user.debugEnabled
 		new = user.debugEnabled
 	return rp.Reply(rp.types.BOOLEAN_CONFIG, description="Debug mode", enabled=new)
 
 @requireUser
-def toggle_karma(user):
+def toggle_karma(user: User):
 	with db.modifyUser(id=user.id) as user:
 		user.hideKarma = not user.hideKarma
 		new = user.hideKarma
 	return rp.Reply(rp.types.BOOLEAN_CONFIG, description="Karma notifications", enabled=not new)
 
 @requireUser
-def get_tripcode(user):
+def get_tripcode(user: User):
 	if not enable_signing:
 		return rp.Reply(rp.types.ERR_COMMAND_DISABLED)
 
 	return rp.Reply(rp.types.TRIPCODE_INFO, tripcode=user.tripcode)
 
 @requireUser
-def set_tripcode(user, text):
+def set_tripcode(user: User, text: str):
 	if not enable_signing:
 		return rp.Reply(rp.types.ERR_COMMAND_DISABLED)
 
-	if not (0 < text.find("#") < len(text) - 1):
+	if not 0 < text.find("#") < len(text) - 1:
 		return rp.Reply(rp.types.ERR_INVALID_TRIP_FORMAT)
 	if "\n" in text or len(text) > 30:
 		return rp.Reply(rp.types.ERR_INVALID_TRIP_FORMAT)
@@ -336,7 +354,7 @@ def set_tripcode(user, text):
 
 @requireUser
 @requireRank(RANKS.admin)
-def promote_user(user, username2, rank):
+def promote_user(user: User, username2: str, rank: int):
 	user2 = getUserByName(username2)
 	if user2 is None:
 		return rp.Reply(rp.types.ERR_NO_USER)
@@ -354,7 +372,7 @@ def promote_user(user, username2, rank):
 
 @requireUser
 @requireRank(RANKS.mod)
-def send_mod_message(user, arg):
+def send_mod_message(user: User, arg: str):
 	text = arg + " ~<b>mods</b>"
 	m = rp.Reply(rp.types.CUSTOM, text=text)
 	_push_system_message(m)
@@ -362,7 +380,7 @@ def send_mod_message(user, arg):
 
 @requireUser
 @requireRank(RANKS.admin)
-def send_admin_message(user, arg):
+def send_admin_message(user: User, arg: str):
 	text = arg + " ~<b>admins</b>"
 	m = rp.Reply(rp.types.CUSTOM, text=text)
 	_push_system_message(m)
@@ -370,7 +388,7 @@ def send_admin_message(user, arg):
 
 @requireUser
 @requireRank(RANKS.mod)
-def warn_user(user, msid, delete=False):
+def warn_user(user: User, msid, delete=False):
 	cm = ch.getMessage(msid)
 	if cm is None or cm.user_id is None:
 		return rp.Reply(rp.types.ERR_NOT_IN_CACHE)
@@ -388,13 +406,13 @@ def warn_user(user, msid, delete=False):
 		if not delete: # allow deleting already warned messages
 			return rp.Reply(rp.types.ERR_ALREADY_WARNED)
 	if delete:
-		Sender.delete(msid)
+		Sender.delete([msid])
 	logging.info("%s warned [%s]%s", user, user2.getObfuscatedId(), delete and " (message deleted)" or "")
 	return rp.Reply(rp.types.SUCCESS)
 
 @requireUser
 @requireRank(RANKS.mod)
-def delete_message(user, msid):
+def delete_message(user: User, msid):
 	if not allow_remove_command:
 		return rp.Reply(rp.types.ERR_COMMAND_DISABLED)
 
@@ -404,13 +422,31 @@ def delete_message(user, msid):
 
 	user2 = db.getUser(id=cm.user_id)
 	_push_system_message(rp.Reply(rp.types.MESSAGE_DELETED), who=user2, reply_to=msid)
-	Sender.delete(msid)
+	Sender.delete([msid])
 	logging.info("%s deleted a message from [%s]", user, user2.getObfuscatedId())
 	return rp.Reply(rp.types.SUCCESS)
 
 @requireUser
 @requireRank(RANKS.admin)
-def uncooldown_user(user, oid2=None, username2=None):
+def cleanup_messages(user: User):
+	msids = []
+	def f(msid: int, cm: CachedMessage):
+		if cm.user_id is None:
+			return
+		if 1337 in cm.upvoted: # mark that we've been here before
+			return
+		user2 = db.getUser(id=cm.user_id)
+		if user2.isBlacklisted():
+			msids.append(msid)
+			cm.upvoted.add(1337)
+	ch.iterateMessages(f)
+	logging.info("%s invoked cleanup (matched: %d)", user, len(msids))
+	Sender.delete(msids)
+	return rp.Reply(rp.types.DELETION_QUEUED, count=len(msids))
+
+@requireUser
+@requireRank(RANKS.admin)
+def uncooldown_user(user: User, oid2=None, username2=None):
 	if oid2 is not None:
 		user2 = getUserByOid(oid2)
 		if user2 is None:
@@ -433,7 +469,7 @@ def uncooldown_user(user, oid2=None, username2=None):
 
 @requireUser
 @requireRank(RANKS.admin)
-def blacklist_user(user, msid, reason):
+def blacklist_user(user: User, msid, reason: str):
 	cm = ch.getMessage(msid)
 	if cm is None or cm.user_id is None:
 		return rp.Reply(rp.types.ERR_NOT_IN_CACHE)
@@ -447,12 +483,12 @@ def blacklist_user(user, msid, reason):
 	_push_system_message(
 		rp.Reply(rp.types.ERR_BLACKLISTED, reason=reason, contact=blacklist_contact),
 		who=user2, reply_to=msid)
-	Sender.delete(msid)
+	Sender.delete([msid])
 	logging.info("%s was blacklisted by %s for: %s", user2, user, reason)
 	return rp.Reply(rp.types.SUCCESS)
 
 @requireUser
-def give_karma(user, msid):
+def give_karma(user: User, msid):
 	cm = ch.getMessage(msid)
 	if cm is None or cm.user_id is None:
 		return rp.Reply(rp.types.ERR_NOT_IN_CACHE)
@@ -471,7 +507,7 @@ def give_karma(user, msid):
 
 
 @requireUser
-def prepare_user_message(user: User, msg_score, *, is_media=False, signed=False, tripcode=False):
+def prepare_user_message(user: User, msg_score: int, *, is_media=False, signed=False, tripcode=False):
 	# prerequisites
 	if user.isInCooldown():
 		return rp.Reply(rp.types.ERR_COOLDOWN, until=user.cooldownUntil)

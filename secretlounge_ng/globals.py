@@ -1,4 +1,4 @@
-from src.util import Enum
+from .util import Enum
 
 # a few utility functions
 def escape_html(s):
@@ -24,20 +24,38 @@ def format_timedelta(d):
 			return "%d%c" % (d // cmp, char)
 	return "%ds" % d.total_seconds()
 
+# 32-bit FNV-1a
+def fnv32a(int_parts, byte_parts) -> int:
+	h = 0x811c9dc5
+	p = 0x01000193
+	for i in int_parts:
+		i = abs(i)
+		# trivial little endian encoding
+		while i != 0:
+			h = ((h ^ (i & 0xff)) * p) & 0xffffffff
+			i >>= 8
+	for bs in byte_parts:
+		for b in bs:
+			h = ((h ^ b) * p) & 0xffffffff
+	return h
+
 ## for debugging ##
 def dump(obj, name=None, r=False):
-	name = "" if name is None else (name + ".")
-	for e, ev in ((e, getattr(obj, e)) for e in dir(obj)):
-		if e.startswith("_") or ev is None:
+	name = (name + ".") if name else ""
+	for k in dir(obj):
+		if k.startswith("_") or isinstance(getattr(obj.__class__, k, None), property):
 			continue
-		if r and ev.__class__.__name__[0].isupper():
-			print("%s%s (%s)" % (name, e, ev.__class__.__name__))
-			dump(ev, name + e, r)
+		v = getattr(obj, k)
+		if v is None:
+			continue
+		if r and v.__class__.__name__[0].isupper():
+			print("%s%s: %s" % (name, k, v.__class__.__name__))
+			dump(v, name + k, r)
 		else:
-			print("%s%s = %r" % (name, e, ev))
+			print("%s%s = %r" % (name, k, v))
 
 # Program version
-VERSION = "1.8"
+VERSION = "1.9"
 
 # Ranks
 RANKS = Enum({

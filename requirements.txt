@@ -1,2 +1,0 @@
-pyTelegramBotAPI>=3.7.4
-pyYAML>=3.12

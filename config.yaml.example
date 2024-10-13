@@ -2,8 +2,13 @@
 bot_token: "5185613617:AAGprv-Gk9_DIYl6mLN9Ng-qftfFa8jZYSo"
 
 # supported db types: json, sqlite
-# both take a single argument which is the database path
-database: [sqlite, "path/to/secretlounge.db"]
+# both take a single argument which is the database file path
+database: [sqlite, "secretlounge.sqlite"]
+
+# salt used for obfuscating user IDs (optional)
+# Needs to be a hexadecimal string, use e.g. `openssl rand -hex 6` to generate.
+# It is recommended to set this. Reusing it between different bots is allowed.
+#secret_salt: ""
 
 # relay contacts
 allow_contacts: false
@@ -12,6 +17,9 @@ allow_documents: true
 
 # allow mods to remove message without issuing a cooldown
 allow_remove_command: false
+
+# enable upvoting by reacting with thumbs-up to a message
+message_reaction_upvote: true
 
 # enable signing messages using /sign or /tsign as well as setting a tripcode
 enable_signing: false

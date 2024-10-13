@@ -1,12 +1,12 @@
 import re
 from string import Formatter
 
-from src.globals import *
+from .globals import *
 
 class NumericEnum(Enum):
 	def __init__(self, names):
 		d = {name: i for i, name in enumerate(names)}
-		super(NumericEnum, self).__init__(d)
+		super().__init__(d)
 
 class CustomFormatter(Formatter):
 	def convert_field(self, value, conversion):
@@ -16,13 +16,13 @@ class CustomFormatter(Formatter):
 			return format_datetime(value)
 		elif conversion == "d": # time[d]elta
 			return format_timedelta(value)
-		return super(CustomFormatter, self).convert_field(value, conversion)
+		return super().convert_field(value, conversion)
 
 # definition of reply class and types
 
 class Reply():
-	def __init__(self, type, **kwargs):
-		self.type = type
+	def __init__(self, type_, **kwargs):
+		self.type = type_
 		self.kwargs = kwargs
 
 types = NumericEnum([
@@ -36,6 +36,7 @@ types = NumericEnum([
 	"USER_NOT_IN_CHAT",
 	"GIVEN_COOLDOWN",
 	"MESSAGE_DELETED",
+	"DELETION_QUEUED",
 	"PROMOTED_MOD",
 	"PROMOTED_ADMIN",
 	"KARMA_THANK_YOU",
@@ -56,9 +57,11 @@ types = NumericEnum([
 	"ERR_UPVOTE_OWN_MESSAGE",
 	"ERR_SPAMMY",
 	"ERR_SPAMMY_SIGN",
+	"ERR_SIGN_PRIVACY",
 	"ERR_INVALID_TRIP_FORMAT",
 	"ERR_NO_TRIPCODE",
 	"ERR_MEDIA_LIMIT",
+	"ERR_POLLS_UNSUPPORTED",
 
 	"USER_INFO",
 	"USER_INFO_MOD",
@@ -99,6 +102,7 @@ format_strs = {
 	types.MESSAGE_DELETED:
 		em( "Your message has been deleted. No cooldown has been "
 			"given this time, but refrain from posting it again." ),
+	types.DELETION_QUEUED: em("{count} messages matched, deletion was queued."),
 	types.PROMOTED_MOD: em("You've been promoted to moderator, run /modhelp for a list of commands."),
 	types.PROMOTED_ADMIN: em("You've been promoted to admin, run /adminhelp for a list of commands."),
 	types.KARMA_THANK_YOU: em("You just gave this user some sweet karma, awesome!"),
@@ -124,11 +128,13 @@ format_strs = {
 	types.ERR_UPVOTE_OWN_MESSAGE: em("You can't upvote your own message."),
 	types.ERR_SPAMMY: em("Your message has not been sent. Avoid sending messages too fast, try again later."),
 	types.ERR_SPAMMY_SIGN: em("Your message has not been sent. Avoid using /sign too often, try again later."),
+	types.ERR_SIGN_PRIVACY: em("Your account privacy settings prevent usage of the sign feature. Enable linked forwards first."),
 	types.ERR_INVALID_TRIP_FORMAT:
 		em("Given tripcode is not valid, the format is ")+
 		"<code>name#pass</code>" + em("."),
 	types.ERR_NO_TRIPCODE: em("You don't have a tripcode set."),
 	types.ERR_MEDIA_LIMIT: em("You can't send media or forward messages at this time, try again later."),
+	types.ERR_POLLS_UNSUPPORTED: em("Your message has not been sent. Polls are not supported, sorry."),
 
 	types.USER_INFO: lambda warnings, cooldown, **_:
 		"<b>id</b>: {id}, <b>username</b>: {username!x}, <b>rank</b>: {rank_i} ({rank})\n"+
@@ -139,7 +145,7 @@ format_strs = {
 		( cooldown and "yes, until {cooldown!t}" or "no" ),
 	types.USER_INFO_MOD: lambda cooldown, **_:
 		"<b>id</b>: {id}, <b>username</b>: anonymous, <b>rank</b>: n/a, "+
-		"<b>karma</b>: {karma}\n"+
+		"<b>karma bracket</b>: {karma}\n"+
 		"<b>cooldown</b>: "+
 		( cooldown and "yes, until {cooldown!t}" or "no" ),
 	types.USERS_INFO: "<b>{count}</b> <i>users</i>",
@@ -147,7 +153,7 @@ format_strs = {
 		"<b>{active}</b> <i>active</i>, {inactive} <i>inactive and</i> "+
 		"{blacklisted} <i>blacklisted users</i> (<i>total</i>: {total})",
 
-	types.PROGRAM_VERSION: "secretlounge-ng v{version} ~ https://github.com/sfan5/secretlounge-ng",
+	types.PROGRAM_VERSION: "secretlounge-ng v{version} ~ https://github.com/secretlounge/secretlounge-ng",
 	types.HELP_MODERATOR:
 		"<i>Moderators can use the following commands</i>:\n"+
 		"  /modhelp - show this text\n"+
@@ -163,9 +169,11 @@ format_strs = {
 		"  /adminhelp - show this text\n"+
 		"  /adminsay &lt;message&gt; - send an official admin message\n"+
 		"  /motd &lt;message&gt; - set the welcome message (HTML formatted)\n"+
+		"  /privacy &lt;message&gt; - set the privacy policy (HTML formatted)\n"+
 		"  /uncooldown &lt;id | username&gt; - remove cooldown from an user\n"+
 		"  /mod &lt;username&gt; - promote an user to the moderator rank\n"+
 		"  /admin &lt;username&gt; - promote an user to the admin rank\n"+
+		"  /cleanup - mass delete messages by currently banned users\n"+
 		"\n"+
 		"<i>Or reply to a message and use</i>:\n"+
 		"  /blacklist [reason] - blacklist the user who sent this message",
